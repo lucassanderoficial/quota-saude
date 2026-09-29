@@ -1,0 +1,12 @@
+{
+  "name": "QuotaSaude",
+  "short_name": "QuotaSaude",
+  "description": "SaaS para clínicas com portais de admin, clínica, médico e paciente.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f5f8f6",
+  "theme_color": "#0a6256",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
