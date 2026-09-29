@@ -1,307 +1,125 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import {
-  Activity,
-  CalendarCheck,
-  ChevronRight,
-  ClipboardList,
-  FilePlus,
-  HeartPulse,
-  LogOut,
-  Pill,
-  Plus,
-  Save,
-  Search,
-  ShieldCheck,
-  Stethoscope,
-  UserPlus,
-  UsersRound,
-} from 'lucide-react';
-import type { Account, Appointment, AppointmentStatus, Patient, Prescription, QuotaStore, UserRole } from '@/domain/types';
-import { canSeePatient, demoStore, roleLabel, SESSION_KEY, STORAGE_KEY, uid } from '@/lib/store';
+import { Activity, Building2, CalendarCheck, ChevronRight, ClipboardList, FilePlus, LogOut, Pill, Plus, Save, Search, ShieldCheck, Stethoscope, UserPlus, UsersRound, X } from 'lucide-react';
+import type { Account, Appointment, AppointmentStatus, Clinic, Doctor, Patient, Prescription, QuotaStore, Sex, UserRole } from '@/domain/types';
+import { accountClinic, canSeePatient, cloneEmptyStore, roleLabel, SESSION_KEY, STORAGE_KEY, uid, visibleClinicIds } from '@/lib/store';
 
-const statusLabel: Record<AppointmentStatus, string> = {
-  requested: 'Solicitado',
-  scheduled: 'Agendado',
-  checked_in: 'Check-in',
-  completed: 'Finalizado',
-  cancelled: 'Cancelado',
-  no_show: 'Faltou',
-};
+type View = 'home' | 'clinics' | 'doctors' | 'patients' | 'prescriptions' | 'appointments' | 'accounts';
+type Sheet = null | 'clinic' | 'doctor' | 'patient' | 'prescription' | 'appointment' | 'account';
 
-const nav = [
-  { id: 'overview', label: 'Visão geral', icon: Activity },
+type UpdateStore = (updater: (current: QuotaStore) => QuotaStore) => void;
+
+const nav: Array<{ id: View; label: string; icon: typeof Activity }> = [
+  { id: 'home', label: 'Início', icon: Activity },
+  { id: 'clinics', label: 'Clínicas', icon: Building2 },
+  { id: 'doctors', label: 'Médicos', icon: Stethoscope },
   { id: 'patients', label: 'Pacientes', icon: UsersRound },
   { id: 'prescriptions', label: 'Prescrições', icon: Pill },
   { id: 'appointments', label: 'Consultas', icon: CalendarCheck },
   { id: 'accounts', label: 'Acessos', icon: ShieldCheck },
-] as const;
+];
 
-type View = (typeof nav)[number]['id'];
-type LoginMode = 'login' | 'register';
-
-type PatientForm = Omit<Patient, 'id' | 'createdAt'>;
-type PrescriptionForm = Omit<Prescription, 'id' | 'issuedAt' | 'status'>;
-type AppointmentForm = Omit<Appointment, 'id' | 'status'>;
-
-const emptyPatient: PatientForm = {
-  clinicId: 'clinic-vida',
-  name: '',
-  cpf: '',
-  birthDate: '',
-  sex: 'nao_informado',
-  phone: '',
-  email: '',
-  address: '',
-  allergies: '',
-  notes: '',
-};
-
-function cloneStore(): QuotaStore {
-  return JSON.parse(JSON.stringify(demoStore));
-}
+const appointmentLabels: Record<AppointmentStatus, string> = { requested: 'Solicitado', scheduled: 'Agendado', checked_in: 'Check-in', completed: 'Finalizado', cancelled: 'Cancelado', no_show: 'Faltou' };
 
 function loadStore(): QuotaStore {
-  if (typeof window === 'undefined') return cloneStore();
+  if (typeof window === 'undefined') return cloneEmptyStore();
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return cloneStore();
-    const parsed = JSON.parse(raw) as QuotaStore;
-    return { ...cloneStore(), ...parsed };
-  } catch {
-    return cloneStore();
-  }
+    return raw ? { ...cloneEmptyStore(), ...JSON.parse(raw) } : cloneEmptyStore();
+  } catch { return cloneEmptyStore(); }
 }
 
-function saveStore(store: QuotaStore) {
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
-}
-
-function initials(name: string) {
-  return name.split(' ').filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
-}
+function persist(store: QuotaStore) { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(store)); }
+function initials(name: string) { return name.split(' ').filter(Boolean).slice(0, 2).map((p) => p[0]).join('').toUpperCase() || 'QS'; }
+function today() { return new Date().toISOString().slice(0, 10); }
 
 export default function QuotaSaudeApp() {
-  const [store, setStore] = useState<QuotaStore>(() => cloneStore());
+  const [store, setStore] = useState<QuotaStore>(() => cloneEmptyStore());
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [view, setView] = useState<View>('overview');
+  const [view, setView] = useState<View>('home');
   const [booted, setBooted] = useState(false);
-
-  useEffect(() => {
-    const nextStore = loadStore();
-    setStore(nextStore);
-    setSessionId(window.localStorage.getItem(SESSION_KEY));
-    setBooted(true);
-  }, []);
-
-  function updateStore(updater: (current: QuotaStore) => QuotaStore) {
-    setStore((current) => {
-      const next = updater(current);
-      saveStore(next);
-      return next;
-    });
-  }
-
   const account = useMemo(() => store.accounts.find((item) => item.id === sessionId) ?? null, [sessionId, store.accounts]);
 
-  function login(email: string, password: string) {
-    const match = store.accounts.find((item) => item.email.toLowerCase() === email.toLowerCase() && item.password === password);
-    if (!match) return false;
-    window.localStorage.setItem(SESSION_KEY, match.id);
-    setSessionId(match.id);
-    setView('overview');
-    return true;
-  }
+  useEffect(() => { setStore(loadStore()); setSessionId(window.localStorage.getItem(SESSION_KEY)); setBooted(true); }, []);
+  const updateStore: UpdateStore = (updater) => setStore((current) => { const next = updater(current); persist(next); return next; });
+  const login = (email: string, password: string) => {
+    const found = store.accounts.find((item) => item.email.toLowerCase() === email.toLowerCase() && item.password === password);
+    if (!found) return false;
+    window.localStorage.setItem(SESSION_KEY, found.id); setSessionId(found.id); setView('home'); return true;
+  };
+  const createFirstAccess = (payload: { name: string; email: string; password: string; role: UserRole; clinicName: string; city: string }) => {
+    if (store.accounts.some((item) => item.email.toLowerCase() === payload.email.toLowerCase())) return { ok: false, message: 'Este e-mail já está cadastrado.' };
+    const clinicId = payload.role === 'admin' ? undefined : uid('clinic');
+    const doctorId = payload.role === 'doctor' ? uid('doctor') : undefined;
+    const patientId = payload.role === 'patient' ? uid('patient') : undefined;
+    const account: Account = { id: uid('acc'), name: payload.name, email: payload.email, password: payload.password, role: payload.role, clinicId, doctorId, patientId, createdAt: new Date().toISOString() };
+    const clinic: Clinic | undefined = clinicId ? { id: clinicId, name: payload.clinicName || 'Minha clínica', city: payload.city || '', plan: 'Starter' } : undefined;
+    const doctor: Doctor | undefined = doctorId && clinicId ? { id: doctorId, clinicId, name: payload.name, specialty: '', crm: '', email: payload.email, phone: '' } : undefined;
+    const patient: Patient | undefined = patientId && clinicId ? { id: patientId, clinicId, name: payload.name, cpf: '', birthDate: '', sex: 'nao_informado', phone: '', email: payload.email, address: '', allergies: '', notes: '', createdAt: new Date().toISOString() } : undefined;
+    const next: QuotaStore = { accounts: [...store.accounts, account], clinics: clinic ? [...store.clinics, clinic] : store.clinics, doctors: doctor ? [...store.doctors, doctor] : store.doctors, patients: patient ? [...store.patients, patient] : store.patients, appointments: store.appointments, prescriptions: store.prescriptions };
+    setStore(next); persist(next); window.localStorage.setItem(SESSION_KEY, account.id); setSessionId(account.id); return { ok: true, message: 'Conta criada.' };
+  };
 
-  function logout() {
-    window.localStorage.removeItem(SESSION_KEY);
-    setSessionId(null);
-    setView('overview');
-  }
-
-  function register(data: { name: string; email: string; password: string; role: UserRole }) {
-    if (store.accounts.some((item) => item.email.toLowerCase() === data.email.toLowerCase())) return { ok: false, message: 'Este e-mail já existe.' };
-    const clinicId = data.role === 'admin' ? undefined : 'clinic-vida';
-    const patientId = data.role === 'patient' ? uid('patient') : undefined;
-    const doctorId = data.role === 'doctor' ? uid('doctor') : undefined;
-    const newAccount: Account = { id: uid('acc'), createdAt: new Date().toISOString(), clinicId, patientId, doctorId, ...data };
-    updateStore((current) => ({
-      ...current,
-      accounts: [...current.accounts, newAccount],
-      doctors: doctorId ? [...current.doctors, { id: doctorId, clinicId: clinicId!, name: data.name, specialty: 'Especialidade não informada', crm: 'CRM pendente', email: data.email, phone: '' }] : current.doctors,
-      patients: patientId ? [...current.patients, { id: patientId, clinicId: clinicId!, name: data.name, cpf: '', birthDate: '', sex: 'nao_informado', phone: '', email: data.email, address: '', allergies: '', notes: '', createdAt: new Date().toISOString() }] : current.patients,
-    }));
-    window.localStorage.setItem(SESSION_KEY, newAccount.id);
-    setSessionId(newAccount.id);
-    return { ok: true, message: 'Conta criada.' };
-  }
-
-  if (!booted) return <LoadingScreen />;
-
-  if (!account) return <AuthScreen onLogin={login} onRegister={register} />;
-
-  return <Workspace account={account} store={store} view={view} setView={setView} updateStore={updateStore} logout={logout} />;
+  if (!booted) return <main className="native-auth"><section className="phone-card"><Brand /><div className="skeleton" /><div className="skeleton small" /></section></main>;
+  if (!account) return <AuthScreen onLogin={login} onCreate={createFirstAccess} hasAccounts={store.accounts.length > 0} />;
+  return <Workspace account={account} store={store} updateStore={updateStore} view={view} setView={setView} logout={() => { window.localStorage.removeItem(SESSION_KEY); setSessionId(null); }} />;
 }
 
-function LoadingScreen() {
-  return <main className="auth-page"><div className="auth-card"><div className="brand big"><span className="brand-mark"><FilePlus /></span><span>QuotaSaude</span></div><div className="skeleton-line" /><div className="skeleton-line short" /></div></main>;
-}
+function Brand() { return <div className="brand"><span className="brand-mark"><FilePlus size={22} /></span><span>QuotaSaude</span></div>; }
 
-function AuthScreen({ onLogin, onRegister }: { onLogin: (email: string, password: string) => boolean; onRegister: (data: { name: string; email: string; password: string; role: UserRole }) => { ok: boolean; message: string } }) {
-  const [mode, setMode] = useState<LoginMode>('login');
-  const [role, setRole] = useState<UserRole>('clinic');
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('clinica@quotasaude.app');
-  const [password, setPassword] = useState('123456');
+function AuthScreen({ onLogin, onCreate, hasAccounts }: { onLogin: (email: string, password: string) => boolean; onCreate: (data: { name: string; email: string; password: string; role: UserRole; clinicName: string; city: string }) => { ok: boolean; message: string }; hasAccounts: boolean }) {
+  const [mode, setMode] = useState<'login' | 'create'>(hasAccounts ? 'login' : 'create');
+  const [form, setForm] = useState({ name: '', email: '', password: '', role: 'clinic' as UserRole, clinicName: '', city: '' });
   const [message, setMessage] = useState('');
-
-  function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setMessage('');
-    if (mode === 'login') {
-      setMessage(onLogin(email, password) ? '' : 'E-mail ou senha inválidos. Use um demo abaixo ou crie uma conta.');
-      return;
-    }
-    if (!name || !email || password.length < 6) {
-      setMessage('Preencha nome, e-mail e senha com no mínimo 6 caracteres.');
-      return;
-    }
-    const result = onRegister({ name, email, password, role });
-    setMessage(result.message);
-  }
-
-  const demos = [
-    ['Admin', 'admin@quotasaude.app'],
-    ['Clínica', 'clinica@quotasaude.app'],
-    ['Médico', 'medico@quotasaude.app'],
-    ['Paciente', 'paciente@quotasaude.app'],
-  ];
-
-  return (
-    <main className="auth-page">
-      <section className="auth-hero">
-        <div className="brand big"><span className="brand-mark"><FilePlus /></span><span>QuotaSaude</span></div>
-        <p className="eyebrow">SaaS funcional para clínicas</p>
-        <h1>Login, pacientes, consultas e prescrições em um só painel.</h1>
-        <p>Admin, clínica, médico e paciente acessam portais diferentes. Esta versão já permite cadastrar dados e manter tudo salvo no navegador.</p>
-        <div className="hero-proof"><span><CheckIcon /> Multi-login</span><span><CheckIcon /> CRUD real</span><span><CheckIcon /> Mobile/desktop</span></div>
-      </section>
-      <form className="auth-card" onSubmit={submit}>
-        <div className="mode-tabs" role="tablist">
-          <button type="button" className={mode === 'login' ? 'active' : ''} onClick={() => setMode('login')}>Entrar</button>
-          <button type="button" className={mode === 'register' ? 'active' : ''} onClick={() => setMode('register')}>Criar conta</button>
-        </div>
-        {mode === 'register' && <Field label="Nome completo"><input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ex: Ana Souza" /></Field>}
-        {mode === 'register' && <Field label="Perfil"><select value={role} onChange={(e) => setRole(e.target.value as UserRole)}><option value="clinic">Clínica</option><option value="doctor">Médico</option><option value="patient">Paciente</option><option value="admin">Admin</option></select></Field>}
-        <Field label="E-mail"><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="voce@clinica.com" /></Field>
-        <Field label="Senha"><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="mínimo 6 caracteres" /></Field>
-        {message && <div className="form-error">{message}</div>}
-        <button className="primary full" type="submit">{mode === 'login' ? 'Entrar no QuotaSaude' : 'Criar e acessar'} <ChevronRight size={18} /></button>
-        <div className="demo-box">
-          <strong>Acessos demo</strong>
-          {demos.map(([label, demoEmail]) => <button type="button" key={demoEmail} onClick={() => { setMode('login'); setEmail(demoEmail); setPassword('123456'); }}>{label}: {demoEmail}</button>)}
-          <small>Senha de todos: 123456</small>
-        </div>
-      </form>
-    </main>
-  );
+  function submit(e: React.FormEvent) { e.preventDefault(); setMessage(''); if (mode === 'login') { setMessage(onLogin(form.email, form.password) ? '' : 'E-mail ou senha inválidos.'); return; } if (!form.name || !form.email || form.password.length < 6) { setMessage('Preencha nome, e-mail e senha com no mínimo 6 caracteres.'); return; } const result = onCreate(form); setMessage(result.ok ? '' : result.message); }
+  return <main className="native-auth"><section className="phone-card auth-device"><div className="status-pill">Sistema real, sem dados demo</div><Brand /><div className="auth-copy"><h1>Entre na sua clínica.</h1><p>Crie o primeiro acesso e cadastre os dados reais da operação.</p></div><form onSubmit={submit} className="native-form"><div className="segment"><button type="button" className={mode === 'login' ? 'active' : ''} onClick={() => setMode('login')}>Entrar</button><button type="button" className={mode === 'create' ? 'active' : ''} onClick={() => setMode('create')}>Criar acesso</button></div>{mode === 'create' && <><Field label="Nome"><input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Seu nome" /></Field><Field label="Perfil"><select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as UserRole })}><option value="clinic">Clínica</option><option value="admin">Admin</option><option value="doctor">Médico</option><option value="patient">Paciente</option></select></Field>{form.role !== 'admin' && <><Field label="Nome da clínica"><input value={form.clinicName} onChange={(e) => setForm({ ...form, clinicName: e.target.value })} placeholder="Ex: Clínica Sander" /></Field><Field label="Cidade"><input value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} placeholder="Cidade" /></Field></>}</>}<Field label="E-mail"><input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="voce@clinica.com" /></Field><Field label="Senha"><input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="mínimo 6 caracteres" /></Field>{message && <div className="form-error">{message}</div>}<button className="primary full" type="submit">{mode === 'login' ? 'Entrar' : 'Criar e entrar'} <ChevronRight size={18} /></button></form></section></main>;
 }
 
-function Workspace({ account, store, view, setView, updateStore, logout }: { account: Account; store: QuotaStore; view: View; setView: (view: View) => void; updateStore: (updater: (current: QuotaStore) => QuotaStore) => void; logout: () => void }) {
-  const visiblePatients = store.patients.filter((patient) => canSeePatient(account, patient, store));
-  const visibleAppointments = store.appointments.filter((appt) => visiblePatients.some((p) => p.id === appt.patientId) || account.role === 'admin');
-  const visiblePrescriptions = store.prescriptions.filter((rx) => visiblePatients.some((p) => p.id === rx.patientId) || account.role === 'admin');
-  const currentClinic = store.clinics.find((clinic) => clinic.id === account.clinicId) ?? store.clinics[0];
+function Workspace({ account, store, updateStore, view, setView, logout }: { account: Account; store: QuotaStore; updateStore: UpdateStore; view: View; setView: (v: View) => void; logout: () => void }) {
+  const [sheet, setSheet] = useState<Sheet>(null);
+  const clinics = store.clinics.filter((c) => visibleClinicIds(account, store).includes(c.id));
+  const doctors = store.doctors.filter((d) => account.role === 'admin' || visibleClinicIds(account, store).includes(d.clinicId));
+  const patients = store.patients.filter((p) => canSeePatient(account, p, store));
+  const appointments = store.appointments.filter((a) => account.role === 'admin' || patients.some((p) => p.id === a.patientId));
+  const prescriptions = store.prescriptions.filter((r) => account.role === 'admin' || patients.some((p) => p.id === r.patientId));
+  const clinic = accountClinic(account, store);
+  const title = { home: 'Início', clinics: 'Clínicas', doctors: 'Médicos', patients: 'Pacientes', prescriptions: 'Prescrições', appointments: 'Consultas', accounts: 'Acessos' }[view];
+  const canManage = ['admin', 'clinic'].includes(account.role);
+  const canClinical = ['admin', 'clinic', 'doctor'].includes(account.role);
 
-  return (
-    <main className="app-shell">
-      <aside className="sidebar">
-        <div className="brand"><span className="brand-mark"><FilePlus /></span><span>QuotaSaude</span></div>
-        <nav className="side-nav">
-          {nav.map((item) => {
-            const Icon = item.icon;
-            const disabled = item.id === 'accounts' && !['admin', 'clinic'].includes(account.role);
-            return <button key={item.id} disabled={disabled} className={view === item.id ? 'active' : ''} onClick={() => setView(item.id)}><Icon size={18} />{item.label}</button>;
-          })}
-        </nav>
-        <div className="user-card"><div className="avatar">{initials(account.name)}</div><strong>{account.name}</strong><span>{roleLabel(account.role)} · {currentClinic?.name ?? 'Global'}</span></div>
-      </aside>
-      <section className="main-panel">
-        <header className="workspace-top">
-          <div><p className="eyebrow">{roleLabel(account.role)}</p><h1>{titleFor(view)}</h1><span>Dados salvos neste navegador. Próxima etapa: banco real multi-tenant.</span></div>
-          <button className="ghost" onClick={logout}><LogOut size={18} /> Sair</button>
-        </header>
-        {view === 'overview' && <Overview store={store} account={account} patients={visiblePatients} appointments={visibleAppointments} prescriptions={visiblePrescriptions} />}
-        {view === 'patients' && <PatientsView account={account} store={store} patients={visiblePatients} updateStore={updateStore} />}
-        {view === 'prescriptions' && <PrescriptionsView account={account} store={store} patients={visiblePatients} prescriptions={visiblePrescriptions} updateStore={updateStore} />}
-        {view === 'appointments' && <AppointmentsView account={account} store={store} patients={visiblePatients} appointments={visibleAppointments} updateStore={updateStore} />}
-        {view === 'accounts' && <AccountsView account={account} store={store} updateStore={updateStore} />}
-      </section>
-      <nav className="bottom-nav">
-        {nav.slice(0, 4).map((item) => { const Icon = item.icon; return <button key={item.id} className={view === item.id ? 'active' : ''} onClick={() => setView(item.id)}><Icon size={18} /><span>{item.label}</span></button>; })}
-      </nav>
-    </main>
-  );
+  return <main className="app"><aside className="rail"><Brand /><nav>{nav.map((item) => { const Icon = item.icon; const hidden = item.id === 'clinics' && account.role !== 'admin'; const disabled = item.id === 'accounts' && !canManage; return hidden ? null : <button key={item.id} disabled={disabled} className={view === item.id ? 'active' : ''} onClick={() => setView(item.id)}><Icon size={18} />{item.label}</button>; })}</nav><div className="profile"><div className="avatar">{initials(account.name)}</div><strong>{account.name}</strong><span>{roleLabel(account.role)}{clinic ? ` · ${clinic.name}` : ''}</span></div></aside><section className="workspace"><header className="top"><div><span className="muted">{roleLabel(account.role)}</span><h1>{title}</h1></div><button className="ghost" onClick={logout}><LogOut size={18} />Sair</button></header>{view === 'home' && <HomeGrid clinics={clinics} doctors={doctors} patients={patients} prescriptions={prescriptions} appointments={appointments} open={setSheet} account={account} />}{view === 'clinics' && <ListPanel title="Clínicas cadastradas" empty="Nenhuma clínica criada ainda." action="Nova clínica" onAction={() => setSheet('clinic')}>{clinics.map((c) => <Record key={c.id} icon={<Building2 />} title={c.name} sub={`${c.city || 'Cidade não informada'} · ${c.plan}`} />)}</ListPanel>}{view === 'doctors' && <ListPanel title="Médicos" empty="Cadastre o primeiro médico." action={canManage ? 'Novo médico' : undefined} onAction={() => setSheet('doctor')}>{doctors.map((d) => <Record key={d.id} icon={<Stethoscope />} title={d.name} sub={`${d.specialty || 'Especialidade pendente'} · ${d.crm || 'CRM pendente'}`} />)}</ListPanel>}{view === 'patients' && <ListPanel title="Pacientes" empty="Cadastre o primeiro paciente." action={canClinical ? 'Novo paciente' : undefined} onAction={() => setSheet('patient')}>{patients.map((p) => <Record key={p.id} icon={<UsersRound />} title={p.name} sub={`${p.phone || 'Telefone pendente'} · ${p.cpf || 'CPF pendente'}`} />)}</ListPanel>}{view === 'prescriptions' && <ListPanel title="Prescrições" empty="Nenhuma prescrição emitida." action={canClinical ? 'Nova prescrição' : undefined} onAction={() => setSheet('prescription')}>{prescriptions.map((r) => <Record key={r.id} icon={<Pill />} title={r.medication} sub={`${nameOf(store.patients, r.patientId)} · ${r.dosage || 'Dosagem pendente'} · ${r.issuedAt}`} />)}</ListPanel>}{view === 'appointments' && <ListPanel title="Consultas" empty="Nenhuma consulta agendada." action="Nova consulta" onAction={() => setSheet('appointment')}>{appointments.map((a) => <Record key={a.id} icon={<CalendarCheck />} title={`${a.date} às ${a.time}`} sub={`${nameOf(store.patients, a.patientId)} · ${appointmentLabels[a.status]} · ${a.reason || 'Sem motivo'}`} />)}</ListPanel>}{view === 'accounts' && <ListPanel title="Acessos" empty="Nenhum acesso criado." action={canManage ? 'Novo acesso' : undefined} onAction={() => setSheet('account')}>{store.accounts.map((a) => <Record key={a.id} icon={<ShieldCheck />} title={a.name} sub={`${roleLabel(a.role)} · ${a.email}`} />)}</ListPanel>}</section><nav className="mobile-nav">{nav.filter((n) => n.id !== 'clinics').slice(0, 5).map((item) => { const Icon = item.icon; return <button key={item.id} className={view === item.id ? 'active' : ''} onClick={() => setView(item.id)}><Icon size={18} /><span>{item.label}</span></button>; })}</nav><BottomSheet sheet={sheet} setSheet={setSheet} setView={setView} account={account} store={store} updateStore={updateStore} /></main>;
 }
 
-function Overview({ store, account, patients, appointments, prescriptions }: { store: QuotaStore; account: Account; patients: Patient[]; appointments: Appointment[]; prescriptions: Prescription[] }) {
-  const today = new Date().toISOString().slice(0, 10);
-  return <div className="stack"><div className="metric-row"><Metric label="Pacientes" value={patients.length} icon={<UsersRound />} /><Metric label="Consultas futuras" value={appointments.filter((a) => a.date >= today).length} icon={<CalendarCheck />} /><Metric label="Prescrições ativas" value={prescriptions.filter((rx) => rx.status === 'active').length} icon={<Pill />} /><Metric label="Clínicas" value={account.role === 'admin' ? store.clinics.length : 1} icon={<HeartPulse />} /></div><div className="grid two"><Panel title="Próximas consultas">{appointments.length ? appointments.slice(0, 5).map((item) => <AppointmentItem key={item.id} item={item} store={store} />) : <Empty text="Nenhuma consulta visível para este perfil." />}</Panel><Panel title="Prescrições recentes">{prescriptions.length ? prescriptions.slice(0, 5).map((rx) => <PrescriptionItem key={rx.id} rx={rx} store={store} />) : <Empty text="Nenhuma prescrição cadastrada ainda." />}</Panel></div></div>;
+function HomeGrid({ clinics, doctors, patients, prescriptions, appointments, open, account }: { clinics: Clinic[]; doctors: Doctor[]; patients: Patient[]; prescriptions: Prescription[]; appointments: Appointment[]; open: (s: Sheet) => void; account: Account }) {
+  const actions: Array<[Sheet, string, typeof Plus]> = [['patient', 'Cadastrar paciente', UsersRound], ['prescription', 'Emitir prescrição', Pill], ['appointment', 'Agendar consulta', CalendarCheck], ['doctor', 'Cadastrar médico', Stethoscope]];
+  return <div className="stack"><div className="metrics"><Metric label="Clínicas" value={clinics.length} /><Metric label="Médicos" value={doctors.length} /><Metric label="Pacientes" value={patients.length} /><Metric label="Prescrições" value={prescriptions.length} /><Metric label="Consultas" value={appointments.length} /></div><section className="panel"><div className="panel-head"><h2>Ações rápidas</h2><span>Formulários abrem como app</span></div><div className="quick-grid">{actions.map(([sheet, label, Icon]) => <button key={label} className="quick" onClick={() => open(sheet)} disabled={sheet === 'doctor' && !['admin', 'clinic'].includes(account.role)}><Icon size={20} /><span>{label}</span><Plus size={18} /></button>)}</div></section></div>;
 }
 
-function PatientsView({ account, store, patients, updateStore }: { account: Account; store: QuotaStore; patients: Patient[]; updateStore: (updater: (current: QuotaStore) => QuotaStore) => void }) {
-  const [query, setQuery] = useState('');
-  const [editing, setEditing] = useState<Patient | null>(null);
-  const [form, setForm] = useState<PatientForm>({ ...emptyPatient, clinicId: account.clinicId ?? store.clinics[0]?.id ?? 'clinic-vida' });
-  const canEdit = ['admin', 'clinic', 'doctor'].includes(account.role);
-  const list = patients.filter((p) => `${p.name} ${p.cpf} ${p.phone}`.toLowerCase().includes(query.toLowerCase()));
-
-  function startEdit(patient: Patient) { setEditing(patient); setForm({ ...patient }); }
-  function clear() { setEditing(null); setForm({ ...emptyPatient, clinicId: account.clinicId ?? store.clinics[0]?.id ?? 'clinic-vida' }); }
-  function save(event: React.FormEvent) {
-    event.preventDefault();
-    if (!form.name.trim()) return;
-    updateStore((current) => ({ ...current, patients: editing ? current.patients.map((p) => p.id === editing.id ? { ...editing, ...form } : p) : [...current.patients, { id: uid('patient'), createdAt: new Date().toISOString(), ...form }] }));
-    clear();
-  }
-
-  return <div className="grid two wide-left"><Panel title="Pacientes cadastrados" action={<div className="search"><Search size={16} /><input placeholder="Buscar paciente" value={query} onChange={(e) => setQuery(e.target.value)} /></div>}>{list.length ? list.map((patient) => <button className="record" key={patient.id} onClick={() => startEdit(patient)}><div className="avatar">{initials(patient.name)}</div><div><strong>{patient.name}</strong><span>{patient.phone || 'Sem telefone'} · {patient.cpf || 'CPF pendente'}</span></div><ChevronRight size={18} /></button>) : <Empty text="Nenhum paciente encontrado." />}</Panel><Panel title={canEdit ? (editing ? 'Editar paciente' : 'Cadastrar paciente') : 'Seu cadastro'}>{canEdit ? <PatientFormView form={form} setForm={setForm} save={save} clear={clear} editing={Boolean(editing)} store={store} /> : <ReadonlyPatient patient={patients[0]} />}</Panel></div>;
+function BottomSheet({ sheet, setSheet, setView, account, store, updateStore }: { sheet: Sheet; setSheet: (sheet: Sheet) => void; setView: (view: View) => void; account: Account; store: QuotaStore; updateStore: UpdateStore }) {
+  const close = () => setSheet(null);
+  const finish = () => {
+    const target: Record<Exclude<Sheet, null>, View> = { clinic: 'clinics', doctor: 'doctors', patient: 'patients', prescription: 'prescriptions', appointment: 'appointments', account: 'accounts' };
+    if (sheet) setView(target[sheet]);
+    setSheet(null);
+  };
+  if (!sheet) return null;
+  return <div className="sheet-backdrop" role="dialog" aria-modal="true"><div className="sheet"><div className="grab" /><button className="sheet-close" onClick={close} aria-label="Fechar"><X size={18} /></button>{sheet === 'clinic' && <ClinicForm close={finish} updateStore={updateStore} />}{sheet === 'doctor' && <DoctorForm close={finish} account={account} store={store} updateStore={updateStore} />}{sheet === 'patient' && <PatientForm close={finish} account={account} store={store} updateStore={updateStore} />}{sheet === 'prescription' && <PrescriptionForm close={finish} account={account} store={store} updateStore={updateStore} />}{sheet === 'appointment' && <AppointmentForm close={finish} account={account} store={store} updateStore={updateStore} />}{sheet === 'account' && <AccountForm close={finish} account={account} store={store} updateStore={updateStore} />}</div></div>;
 }
 
-function PatientFormView({ form, setForm, save, clear, editing, store }: { form: PatientForm; setForm: (form: PatientForm) => void; save: (event: React.FormEvent) => void; clear: () => void; editing: boolean; store: QuotaStore }) {
-  return <form className="form-grid" onSubmit={save}><Field label="Clínica"><select value={form.clinicId} onChange={(e) => setForm({ ...form, clinicId: e.target.value })}>{store.clinics.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></Field><Field label="Nome"><input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field><Field label="CPF"><input value={form.cpf} onChange={(e) => setForm({ ...form, cpf: e.target.value })} /></Field><Field label="Nascimento"><input type="date" value={form.birthDate} onChange={(e) => setForm({ ...form, birthDate: e.target.value })} /></Field><Field label="Sexo"><select value={form.sex} onChange={(e) => setForm({ ...form, sex: e.target.value as Patient['sex'] })}><option value="nao_informado">Não informado</option><option value="feminino">Feminino</option><option value="masculino">Masculino</option><option value="outro">Outro</option></select></Field><Field label="Telefone"><input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></Field><Field label="E-mail"><input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field><Field label="Endereço"><input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} /></Field><Field label="Alergias"><textarea value={form.allergies} onChange={(e) => setForm({ ...form, allergies: e.target.value })} /></Field><Field label="Observações"><textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field><div className="form-actions"><button className="primary" type="submit"><Save size={17} />{editing ? 'Salvar paciente' : 'Cadastrar paciente'}</button><button type="button" className="ghost" onClick={clear}>Limpar</button></div></form>;
-}
+function ClinicForm({ close, updateStore }: { close: () => void; updateStore: UpdateStore }) { const [f, setF] = useState({ name: '', city: '', plan: 'Starter' as Clinic['plan'] }); return <SheetForm title="Nova clínica" onSubmit={() => { updateStore((s) => ({ ...s, clinics: [...s.clinics, { id: uid('clinic'), ...f }] })); close(); }}><Field label="Nome"><input required value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field><Field label="Cidade"><input value={f.city} onChange={(e) => setF({ ...f, city: e.target.value })} /></Field><Field label="Plano"><select value={f.plan} onChange={(e) => setF({ ...f, plan: e.target.value as Clinic['plan'] })}><option>Starter</option><option>Growth</option><option>Enterprise</option></select></Field></SheetForm>; }
+function DoctorForm({ close, account, store, updateStore }: FormProps) { const [f, setF] = useState({ clinicId: account.clinicId ?? store.clinics[0]?.id ?? '', name: '', specialty: '', crm: '', email: '', phone: '' }); return <SheetForm title="Novo médico" onSubmit={() => { updateStore((s) => ({ ...s, doctors: [...s.doctors, { id: uid('doctor'), ...f }] })); close(); }}><ClinicSelect f={f} setF={setF} clinics={store.clinics} /><Field label="Nome"><input required value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field><Field label="Especialidade"><input value={f.specialty} onChange={(e) => setF({ ...f, specialty: e.target.value })} /></Field><Field label="CRM"><input value={f.crm} onChange={(e) => setF({ ...f, crm: e.target.value })} /></Field><Field label="E-mail"><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></Field><Field label="Telefone"><input value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} /></Field></SheetForm>; }
+function PatientForm({ close, account, store, updateStore }: FormProps) { const [f, setF] = useState({ clinicId: account.clinicId ?? store.clinics[0]?.id ?? '', name: '', cpf: '', birthDate: '', sex: 'nao_informado' as Sex, phone: '', email: '', address: '', allergies: '', notes: '' }); return <SheetForm title="Novo paciente" onSubmit={() => { updateStore((s) => ({ ...s, patients: [...s.patients, { id: uid('patient'), createdAt: new Date().toISOString(), ...f }] })); close(); }}><ClinicSelect f={f} setF={setF} clinics={store.clinics} /><Field label="Nome"><input required value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field><Field label="CPF"><input value={f.cpf} onChange={(e) => setF({ ...f, cpf: e.target.value })} /></Field><Field label="Nascimento"><input type="date" value={f.birthDate} onChange={(e) => setF({ ...f, birthDate: e.target.value })} /></Field><Field label="Sexo"><select value={f.sex} onChange={(e) => setF({ ...f, sex: e.target.value as Sex })}><option value="nao_informado">Não informado</option><option value="feminino">Feminino</option><option value="masculino">Masculino</option><option value="outro">Outro</option></select></Field><Field label="Telefone"><input value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} /></Field><Field label="E-mail"><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></Field><Field label="Endereço"><input value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} /></Field><Field label="Alergias"><textarea value={f.allergies} onChange={(e) => setF({ ...f, allergies: e.target.value })} /></Field><Field label="Observações"><textarea value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} /></Field></SheetForm>; }
+function PrescriptionForm({ close, account, store, updateStore }: FormProps) { const patients = store.patients.filter((p) => canSeePatient(account, p, store)); const doctors = store.doctors.filter((d) => account.role === 'admin' || visibleClinicIds(account, store).includes(d.clinicId)); const [f, setF] = useState({ clinicId: account.clinicId ?? patients[0]?.clinicId ?? '', patientId: patients[0]?.id ?? '', doctorId: account.doctorId ?? doctors[0]?.id ?? '', medication: '', dosage: '', instructions: '', duration: '' }); return <SheetForm title="Nova prescrição" onSubmit={() => { updateStore((s) => ({ ...s, prescriptions: [{ id: uid('rx'), status: 'active', issuedAt: today(), ...f }, ...s.prescriptions] })); close(); }}><EntitySelect label="Paciente" value={f.patientId} onChange={(v) => setF({ ...f, patientId: v })} items={patients} /><EntitySelect label="Médico" value={f.doctorId} onChange={(v) => setF({ ...f, doctorId: v })} items={doctors} /><Field label="Medicamento"><input required value={f.medication} onChange={(e) => setF({ ...f, medication: e.target.value })} /></Field><Field label="Dosagem"><input value={f.dosage} onChange={(e) => setF({ ...f, dosage: e.target.value })} /></Field><Field label="Duração"><input value={f.duration} onChange={(e) => setF({ ...f, duration: e.target.value })} /></Field><Field label="Instruções"><textarea value={f.instructions} onChange={(e) => setF({ ...f, instructions: e.target.value })} /></Field></SheetForm>; }
+function AppointmentForm({ close, account, store, updateStore }: FormProps) { const patients = store.patients.filter((p) => canSeePatient(account, p, store)); const doctors = store.doctors.filter((d) => account.role === 'admin' || visibleClinicIds(account, store).includes(d.clinicId)); const [f, setF] = useState({ clinicId: account.clinicId ?? patients[0]?.clinicId ?? '', patientId: account.patientId ?? patients[0]?.id ?? '', doctorId: account.doctorId ?? doctors[0]?.id ?? '', date: today(), time: '09:00', reason: '' }); return <SheetForm title="Nova consulta" onSubmit={() => { updateStore((s) => ({ ...s, appointments: [{ id: uid('appt'), status: account.role === 'patient' ? 'requested' : 'scheduled', ...f }, ...s.appointments] })); close(); }}><EntitySelect label="Paciente" value={f.patientId} onChange={(v) => setF({ ...f, patientId: v })} items={patients} /><EntitySelect label="Médico" value={f.doctorId} onChange={(v) => setF({ ...f, doctorId: v })} items={doctors} /><Field label="Data"><input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></Field><Field label="Hora"><input type="time" value={f.time} onChange={(e) => setF({ ...f, time: e.target.value })} /></Field><Field label="Motivo"><textarea value={f.reason} onChange={(e) => setF({ ...f, reason: e.target.value })} /></Field></SheetForm>; }
+function AccountForm({ close, account, store, updateStore }: FormProps) { const [f, setF] = useState({ name: '', email: '', password: '', role: 'clinic' as UserRole, clinicId: account.clinicId ?? store.clinics[0]?.id ?? '' }); return <SheetForm title="Novo acesso" onSubmit={() => { updateStore((s) => ({ ...s, accounts: [...s.accounts, { id: uid('acc'), createdAt: new Date().toISOString(), ...f }] })); close(); }}><Field label="Nome"><input required value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field><Field label="E-mail"><input required type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></Field><Field label="Senha"><input required value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} /></Field><Field label="Perfil"><select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value as UserRole })}><option value="clinic">Clínica</option><option value="doctor">Médico</option><option value="patient">Paciente</option><option value="admin">Admin</option></select></Field><ClinicSelect f={f} setF={setF} clinics={store.clinics} /></SheetForm>; }
 
-function PrescriptionsView({ account, store, patients, prescriptions, updateStore }: { account: Account; store: QuotaStore; patients: Patient[]; prescriptions: Prescription[]; updateStore: (updater: (current: QuotaStore) => QuotaStore) => void }) {
-  const firstPatient = patients[0]?.id ?? '';
-  const firstDoctor = account.doctorId ?? store.doctors[0]?.id ?? '';
-  const [form, setForm] = useState<PrescriptionForm>({ clinicId: account.clinicId ?? 'clinic-vida', patientId: firstPatient, doctorId: firstDoctor, medication: '', dosage: '', instructions: '', duration: '' });
-  const canEdit = ['admin', 'clinic', 'doctor'].includes(account.role);
-  function save(event: React.FormEvent) { event.preventDefault(); if (!form.patientId || !form.medication) return; updateStore((current) => ({ ...current, prescriptions: [{ id: uid('rx'), issuedAt: new Date().toISOString().slice(0, 10), status: 'active', ...form }, ...current.prescriptions] })); setForm({ ...form, medication: '', dosage: '', instructions: '', duration: '' }); }
-  return <div className="grid two wide-left"><Panel title="Prescrições">{prescriptions.length ? prescriptions.map((rx) => <PrescriptionItem key={rx.id} rx={rx} store={store} />) : <Empty text="Nenhuma prescrição ainda." />}</Panel><Panel title="Nova prescrição">{canEdit ? <form className="form-grid" onSubmit={save}><Field label="Paciente"><select required value={form.patientId} onChange={(e) => setForm({ ...form, patientId: e.target.value })}>{patients.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></Field><Field label="Médico"><select value={form.doctorId} onChange={(e) => setForm({ ...form, doctorId: e.target.value })}>{store.doctors.map((d) => <option key={d.id} value={d.id}>{d.name} · {d.specialty}</option>)}</select></Field><Field label="Medicamento"><input required value={form.medication} onChange={(e) => setForm({ ...form, medication: e.target.value })} placeholder="Ex: Amoxicilina 500mg" /></Field><Field label="Dosagem"><input value={form.dosage} onChange={(e) => setForm({ ...form, dosage: e.target.value })} placeholder="1 cápsula a cada 8h" /></Field><Field label="Duração"><input value={form.duration} onChange={(e) => setForm({ ...form, duration: e.target.value })} placeholder="7 dias" /></Field><Field label="Instruções"><textarea value={form.instructions} onChange={(e) => setForm({ ...form, instructions: e.target.value })} /></Field><button className="primary" type="submit"><FilePlus size={17} /> Emitir prescrição</button></form> : <Empty text="Paciente só visualiza suas prescrições." />}</Panel></div>;
-}
-
-function AppointmentsView({ account, store, patients, appointments, updateStore }: { account: Account; store: QuotaStore; patients: Patient[]; appointments: Appointment[]; updateStore: (updater: (current: QuotaStore) => QuotaStore) => void }) {
-  const [form, setForm] = useState<AppointmentForm>({ clinicId: account.clinicId ?? 'clinic-vida', patientId: account.patientId ?? patients[0]?.id ?? '', doctorId: account.doctorId ?? store.doctors[0]?.id ?? '', date: new Date().toISOString().slice(0, 10), time: '09:00', reason: '' });
-  function save(event: React.FormEvent) { event.preventDefault(); if (!form.patientId || !form.doctorId) return; updateStore((current) => ({ ...current, appointments: [{ id: uid('appt'), status: account.role === 'patient' ? 'requested' : 'scheduled', ...form }, ...current.appointments] })); setForm({ ...form, reason: '' }); }
-  function updateStatus(id: string, status: AppointmentStatus) { updateStore((current) => ({ ...current, appointments: current.appointments.map((a) => a.id === id ? { ...a, status } : a) })); }
-  return <div className="grid two wide-left"><Panel title="Agenda">{appointments.length ? appointments.map((item) => <AppointmentItem key={item.id} item={item} store={store} onStatus={['admin','clinic','doctor'].includes(account.role) ? updateStatus : undefined} />) : <Empty text="Nenhuma consulta cadastrada." />}</Panel><Panel title={account.role === 'patient' ? 'Solicitar consulta' : 'Agendar consulta'}><form className="form-grid" onSubmit={save}><Field label="Paciente"><select value={form.patientId} onChange={(e) => setForm({ ...form, patientId: e.target.value })}>{patients.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></Field><Field label="Médico"><select value={form.doctorId} onChange={(e) => setForm({ ...form, doctorId: e.target.value })}>{store.doctors.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select></Field><Field label="Data"><input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></Field><Field label="Horário"><input type="time" value={form.time} onChange={(e) => setForm({ ...form, time: e.target.value })} /></Field><Field label="Motivo"><textarea value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} /></Field><button className="primary" type="submit"><CalendarCheck size={17} /> Salvar consulta</button></form></Panel></div>;
-}
-
-function AccountsView({ account, store, updateStore }: { account: Account; store: QuotaStore; updateStore: (updater: (current: QuotaStore) => QuotaStore) => void }) {
-  const [form, setForm] = useState({ name: '', email: '', password: '123456', role: 'clinic' as UserRole, clinicId: account.clinicId ?? store.clinics[0]?.id ?? 'clinic-vida' });
-  const allowed = ['admin', 'clinic'].includes(account.role);
-  function save(event: React.FormEvent) { event.preventDefault(); if (!allowed || !form.name || !form.email) return; updateStore((current) => ({ ...current, accounts: [...current.accounts, { id: uid('acc'), createdAt: new Date().toISOString(), ...form }] })); setForm({ ...form, name: '', email: '', password: '123456' }); }
-  return <div className="grid two wide-left"><Panel title="Usuários">{store.accounts.map((user) => <div className="record static" key={user.id}><div className="avatar">{initials(user.name)}</div><div><strong>{user.name}</strong><span>{roleLabel(user.role)} · {user.email}</span></div></div>)}</Panel><Panel title="Criar acesso">{allowed ? <form className="form-grid" onSubmit={save}><Field label="Nome"><input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field><Field label="E-mail"><input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field><Field label="Senha"><input value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></Field><Field label="Perfil"><select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as UserRole })}><option value="clinic">Clínica</option><option value="doctor">Médico</option><option value="patient">Paciente</option><option value="admin">Admin</option></select></Field><button className="primary" type="submit"><UserPlus size={17} /> Criar acesso</button></form> : <Empty text="Seu perfil não pode criar usuários." />}</Panel></div>;
-}
-
+type FormProps = { close: () => void; account: Account; store: QuotaStore; updateStore: UpdateStore };
+function SheetForm({ title, onSubmit, children }: { title: string; onSubmit: () => void; children: React.ReactNode }) { return <form className="sheet-form" onSubmit={(e) => { e.preventDefault(); onSubmit(); }}><h2>{title}</h2><div className="sheet-fields">{children}</div><button className="primary full" type="submit"><Save size={17} />Salvar</button></form>; }
 function Field({ label, children }: { label: string; children: React.ReactNode }) { return <label className="field"><span>{label}</span>{children}</label>; }
-function Panel({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) { return <section className="panel"><div className="panel-head"><h2>{title}</h2>{action}</div>{children}</section>; }
-function Metric({ label, value, icon }: { label: string; value: number; icon: React.ReactNode }) { return <div className="metric"><div>{icon}</div><strong>{value}</strong><span>{label}</span></div>; }
-function Empty({ text }: { text: string }) { return <div className="empty"><ClipboardList size={20} /><span>{text}</span></div>; }
-function ReadonlyPatient({ patient }: { patient?: Patient }) { if (!patient) return <Empty text="Nenhum cadastro vinculado." />; return <div className="readonly"><strong>{patient.name}</strong><span>{patient.email}</span><span>{patient.phone}</span><span>{patient.address}</span><p>{patient.notes}</p></div>; }
-function titleFor(view: View) { return { overview: 'Painel operacional', patients: 'Pacientes', prescriptions: 'Prescrições', appointments: 'Consultas', accounts: 'Acessos e usuários' }[view]; }
-function CheckIcon() { return <span className="check-dot">✓</span>; }
-function AppointmentItem({ item, store, onStatus }: { item: Appointment; store: QuotaStore; onStatus?: (id: string, status: AppointmentStatus) => void }) { const patient = store.patients.find((p) => p.id === item.patientId); const doctor = store.doctors.find((d) => d.id === item.doctorId); return <div className="record static"><div className="date-chip"><strong>{item.time}</strong><span>{item.date.slice(5).replace('-', '/')}</span></div><div><strong>{patient?.name ?? 'Paciente removido'}</strong><span>{doctor?.name ?? 'Médico pendente'} · {item.reason || 'Sem motivo'}</span></div>{onStatus ? <select className="mini-select" value={item.status} onChange={(e) => onStatus(item.id, e.target.value as AppointmentStatus)}>{Object.entries(statusLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select> : <span className="badge">{statusLabel[item.status]}</span>}</div>; }
-function PrescriptionItem({ rx, store }: { rx: Prescription; store: QuotaStore }) { const patient = store.patients.find((p) => p.id === rx.patientId); const doctor = store.doctors.find((d) => d.id === rx.doctorId); return <div className="record static"><div className="icon-chip"><Pill size={18} /></div><div><strong>{rx.medication}</strong><span>{patient?.name} · {doctor?.name}</span><small>{rx.dosage} · {rx.duration} · {rx.instructions}</small></div><span className="badge">{rx.status}</span></div>; }
+function ClinicSelect<T extends { clinicId: string }>({ f, setF, clinics }: { f: T; setF: (f: T) => void; clinics: Clinic[] }) { return <Field label="Clínica"><select required value={f.clinicId} onChange={(e) => setF({ ...f, clinicId: e.target.value })}><option value="">Selecione</option>{clinics.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></Field>; }
+function EntitySelect<T extends { id: string; name: string }>({ label, value, onChange, items }: { label: string; value: string; onChange: (value: string) => void; items: T[] }) { return <Field label={label}><select required value={value} onChange={(e) => onChange(e.target.value)}><option value="">Selecione</option>{items.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field>; }
+function Metric({ label, value }: { label: string; value: number }) { return <div className="metric"><strong>{value}</strong><span>{label}</span></div>; }
+function ListPanel({ title, empty, action, onAction, children }: { title: string; empty: string; action?: string; onAction?: () => void; children: React.ReactNode }) { const count = Array.isArray(children) ? children.length : 0; return <section className="panel list-panel"><div className="panel-head"><div><h2>{title}</h2><span>{count} registro(s)</span></div>{action && <button className="primary" onClick={onAction}><Plus size={17} />{action}</button>}</div>{count ? children : <div className="empty"><ClipboardList size={22} /><span>{empty}</span></div>}</section>; }
+function Record({ icon, title, sub }: { icon: React.ReactNode; title: string; sub: string }) { return <div className="record"><div className="record-icon">{icon}</div><div><strong>{title}</strong><span>{sub}</span></div></div>; }
+function nameOf<T extends { id: string; name: string }>(items: T[], id: string) { return items.find((item) => item.id === id)?.name ?? 'Não informado'; }
