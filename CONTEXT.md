@@ -42,6 +42,15 @@ Dados profissionais do médico: especialidade, CRM, agenda, unidades e status.
 ### PatientProfile
 Dados do paciente: contato, documentos, histórico e preferências.
 
+### Prescription
+Prescrição emitida por médico para um paciente, com medicamento, dosagem, instruções, duração, status e data de emissão.
+
+Status:
+- draft: rascunho ainda não emitido.
+- active: prescrição em uso.
+- completed: tratamento concluído.
+- cancelled: cancelada.
+
 ### CareQuota
 Cota/limite operacional ou comercial da clínica, usado para acompanhar atendimentos, convênios, pacotes ou capacidade contratada.
 
